@@ -1,2 +1,17 @@
 # narou-downloader.py
 小説家になろう系作品テキストダウンローダー for Python
+
+kakuyomu-downloader-pyはDelphiで書いた処理をそのままPythonに移植したため結構ごちゃごちゃした感じになりましたが、こちらはBeautifulSoupを使用したためかなりシンプルになっています(ある程度実用的なものにしたかったので少しはごちゃごちゃしています)。
+
+
+## 使い方
+python(|py|python3) ダウンロードしたい作品のトップページURL
+
+## 出来ないこと
+・短編には対応していません
+・各話の前書き・後書きは無視しています
+・BeautifulSoupでテキストを取得しているためルビや挿絵には対応していません
+・cookieには対応していないのでR18系作品はDL出来ません
+
+## LICENSE
+MIT
