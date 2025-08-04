@@ -42,8 +42,11 @@ def get_chapter(src) -> str:
     soup = BeautifulSoup(src, 'html.parser')
     ctmp = soup.select('div[class="c-announce"]')
     cpt  = str(ctmp[0])
-    stmp = BeautifulSoup(cpt, 'html.parser')
-    chpt = stmp.find('span').text
+    try:
+        stmp = BeautifulSoup(cpt, 'html.parser')
+        chpt = stmp.find('span').text
+    except:
+        chpt = ''
     return chpt
 
 # メイン処理
