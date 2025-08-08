@@ -1,6 +1,7 @@
 #
 # BeautifulSoupを使用した小説家になろうダウンローダーフルセットバージョン
 #
+# ver1.2 2025/08/08 短編に対応した
 # ver1.1 2025/08/07 R18系(ノクターン等)作品のDLに対応
 #                   指定した作品URLの正当性チェックを追加した
 #                   章タイトル取得方法の不具合を修正した
@@ -17,9 +18,12 @@ import re
 import codecs
 
 headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-text_page = []      # 取り出したテキスト保管用
-filename = ''
-session = requests.session()    # 設定したcookieを維持するためグローバル宣言しておく
+text_page = []  # 取り出したテキスト保管用
+filename = ''   # 保存ファイル名
+nvl_stat = ''   # 作品連載状況
+total_pg = 0    # 作品総ページ数
+auth_url = ''   # 作者ページURL
+session = requests.session()  # 設定したcookieを維持するためグローバル宣言しておく
 
 # 本文の青空文庫ルビ指定に用いられる文字があった場合誤作動しないように
 # 青空文庫代替表記に変換する
@@ -33,20 +37,35 @@ def aozora_esc(base: str) -> str:
 def restore2realchar(base: str) -> str:
     return html.unescape(base)
 # 作品ページから連載状況を取得する
-def get_nv_stat(url: str) -> str:
-    global session
+def get_nvl_stat(url: str) -> bool:
+    global nvl_stat, total_pg, auth_url, session
 
     res    = session.get(url, headers=headers)
     soup   = BeautifulSoup(res.text, 'html.parser')
-    nvstat = soup.find('span', class_='p-infotop-type__type').text
-    if nvstat != '':
-        nvstat = f'【{nvstat}】'
-    return nvstat
+    try:
+        nvl_stat = soup.find('span', class_='p-infotop-type__type').text
+        if nvl_stat != '':
+            nvl_stat = f'【{nvl_stat}】'
+    except:
+        nvl_stat = ''
+    try:
+        pg = soup.find('span', class_='p-infotop-type__allep').text
+        pg = re.sub('エピソード', '', re.sub('全','', pg))
+        total_pg = int(pg)
+    except:
+        total_pg = 0
+    try:
+        rurl = re.search('<dd class="p-infotop-data__value"><a href=".*?">', res.text)
+        if rurl:
+            auth_url = re.sub('">', '', re.sub('<dd class="p-infotop-data__value"><a href="', '', rurl.group()))
+    except:
+        auth_url = ''
+    return nvl_stat != ''
 
 
 # トップページの情報を取得する
 def get_toppage(url):
-    global headers, text_page, filename, session
+    global headers, text_page, filename, nvl_stat, session
 
     res    = session.get(url, headers=headers)
     soup   = BeautifulSoup(res.text, 'html.parser')
@@ -59,14 +78,13 @@ def get_toppage(url):
         summary = ''
     # 作品情報URLを取得して連先状況を確認する
     a_tags = soup.find_all('a', class_='c-menu__item c-menu__item--headnav')
-    nvstat = get_nv_stat(a_tags[0].get('href'))
+    get_nvl_stat(a_tags[0].get('href'))
     # 保存するファイル名を作成する(ついでに24文字までに整形)
-    filename = nvstat + re.sub('[\\*?+.\t/:;,.| ]', '-', title)
+    filename = re.sub('[\\*?+.\t/:;,.| ]', '-', title)
     if len(filename) > 24:
         filename = title[:24]
-    filename = filename + '.txt'
-    title = nvstat + title
-
+    filename = nvl_stat + filename + '.txt'
+    title = nvl_stat + title
     print(f'作品タイトル：{title} をダウンロードします')
     text_page.append(f'{title}\n{auther}\n［＃ここから罫囲み］\n{summary}\n［＃ここで罫囲み終わり］\n［＃改ページ］\n')
 
@@ -91,46 +109,36 @@ def get_chapter(src) -> str:
 
 # メイン処理
 def download_narou(url) -> bool:
-    global headers, text_page, session
+    global headers, text_page, session, nvl_stat, total_pg
 
     get_toppage(url) # トップページ情報取得
 
-    page_url = f'{url}1/' # 1ページ目
-    res = session.get(page_url, headers=headers)
-    if res.status_code != 200:
-        print(f'{i}ページの取得に失敗しました')
-        return False
-    soup = BeautifulSoup(res.text, 'html.parser')
-    # 1/xxxから総ページ数xxxを取得する
-    pg   = soup.find('div', class_='p-novel__number js-siori').text
-    pgn  = int(pg.replace('1/', ''))    # 総ページ数
-    sys.stdout.write('各話を取得中 [ 1/ ' + str(pgn) + ']')
-    # 章タイトル、話タイトル、本文を取得する
-    chpt = aozora_esc(get_chapter(res.text))
-    sect = aozora_esc(soup.find('h1', class_='p-novel__title p-novel__title--rensai').text)
-    try: # 前書き
-        irfc = aozora_esc(soup.find('div', class_='js-novel-text p-novel__text p-novel__text--preface').text)
-    except:
-        irfc = ''
-    body = aozora_esc(soup.find('div', class_='js-novel-text p-novel__text').text) # 本文
-    try: # 後書き
-        pscr = aozora_esc(soup.find('div', class_='js-novel-text p-novel__text p-novel__text--afterword').text)
-    except:
-        pscr = ''
-    chapter = chpt # 章タイトルを保存する
-    # 1ページ目を出力
-    if chpt:
-        text_page.append(f'［＃大見出し］{chpt}［＃大見出し終わり］\n')
-    text_page.append(f'［＃中見出し］{sect}［＃中見出し終わり］\n')
-    if irfc:
-        text_page.append(f'［＃水平線］［＃ここから罫囲み］\n{irfc}\n［＃ここで罫囲み終わり］［＃水平線］\n')
-    text_page.append(f'{body}\n')
-    if pscr:
-        text_page.append(f'［＃水平線］［＃ここから罫囲み］\n{pscr}\n［＃ここで罫囲み終わり］［＃水平線］\n')
-    text_page.append('［＃改ページ］\n')
-
-    for i in range(2, pgn + 1): # 2ページ目以降を取得・出力する
-        sys.stdout.write('\r各話を取得中 [ ' + str(i) + '/ ' + str(pgn) + ']')
+    if total_pg == 0: # 短編の場合の本文取得処理
+        res = session.get(url, headers=headers)
+        if res.status_code != 200:
+            print(f'{i}ページの取得に失敗しました')
+            return False
+        soup = BeautifulSoup(res.text, 'html.parser')
+        sect = '本文'
+        try: # 前書き
+            irfc = aozora_esc(soup.find('div', class_='js-novel-text p-novel__text p-novel__text--preface').text)
+        except:
+            irfc = ''
+        body = aozora_esc(soup.find('div', class_='js-novel-text p-novel__text').text) # 本文
+        try: # 後書き
+            pscr = aozora_esc(soup.find('div', class_='js-novel-text p-novel__text p-novel__text--afterword').text)
+        except:
+            pscr = ''
+        text_page.append(f'［＃中見出し］{sect}［＃中見出し終わり］\n')
+        if irfc:
+            text_page.append(f'［＃水平線］［＃ここから罫囲み］\n{irfc}\n［＃ここで罫囲み終わり］［＃水平線］\n')
+        text_page.append(f'{body}\n')
+        if pscr:
+            text_page.append(f'［＃水平線］［＃ここから罫囲み］\n{pscr}\n［＃ここで罫囲み終わり］［＃水平線］\n')
+        text_page.append('［＃改ページ］\n')
+    chapter = ''
+    for i in range(1, total_pg + 1): # 連載作品の場合の各ページ取得処理
+        sys.stdout.write('\r各話を取得中 [ ' + str(i) + '/ ' + str(total_pg) + ']')
         page_url = f'{url}{i}/'
         res = session.get(page_url, headers=headers)
         if res.status_code != 200:
@@ -149,7 +157,7 @@ def download_narou(url) -> bool:
         except:
             pscr = ''
         if chapter != chpt: # 章が変わった
-            text_page.append(f'［＃大見出し］{chpt}［＃大見出し終わり］')
+            text_page.append(f'［＃大見出し］{chpt}［＃大見出し終わり］\n')
             chapter = chpt
         text_page.append(f'［＃中見出し］{sect}［＃中見出し終わり］\n')
         if irfc:
@@ -160,7 +168,7 @@ def download_narou(url) -> bool:
         text_page.append('［＃改ページ］\n')
 
         time.sleep(0.5)  # サーバー負荷軽減
-    print('・・・完了\n')
+    print('・・・完了')
 
     return True
 
@@ -190,9 +198,6 @@ def main():
         fout.writelines(text_page)
         fout.close()
         print(filename + ' に保存しました.')
-
-        print('\nダウンロードが完了しました.\n')
-
 
 if __name__ == '__main__':
     main()
