@@ -1,6 +1,8 @@
 #
 # BeautifulSoupを使用した小説家になろうダウンローダー
 #
+# ver1.4 2025/08/11 findの反転方法が間違っており連載状況を付加できなかった不具合を修正した
+#                   短編と連載のbody取得処理が重複していたのを集約した
 # ver1.3 2025/08/10 ルビ・挿絵に対応した
 # ver1.2 2025/08/08 短編に対応した
 # ver1.1 2025/08/07 R18系(ノクターン等)作品のDLに対応
@@ -91,7 +93,7 @@ def get_toppage(url):
     if len(filename) > 24:
         filename = title[:24]
     # タイトル名に連載状況が含まれていなければ先頭に付加する
-    if title.find(nvl_stat) is None:
+    if title.find(nvl_stat) == -1:
         filename = f'【{nvl_stat}】' + filename
         title = f'【{nvl_stat}】' + title
     filename = filename + '.txt'
@@ -117,6 +119,27 @@ def get_chapter(src) -> str:
         chpt = ''
     return chpt
 
+# 各話本文取得処理
+def get_body(htmlsrc) -> str:
+    soup = BeautifulSoup(htmlsrc, 'html.parser')
+    atxt = ''
+    try: # 前書き
+        irfc = aozora_esc(str(soup.find('div', class_='js-novel-text p-novel__text p-novel__text--preface')))
+    except:
+        irfc = 'None' # soup.findで帰り値がない場合はObject[None]が返されるがstrでキャストしてるため文字列m'None'が返される
+    body = aozora_esc(str(soup.find('div', class_='js-novel-text p-novel__text'))) # 本文
+    try: # 後書き
+        pscr = aozora_esc(str(soup.find('div', class_='js-novel-text p-novel__text p-novel__text--afterword')))
+    except:
+        pscr = 'None'
+    if irfc != 'None':
+        atxt = f'［＃水平線］［＃ここから罫囲み］\n{irfc}\n［＃ここで罫囲み終わり］［＃水平線］\n'
+    atxt = atxt + f'{body}\n'
+    if pscr != 'None':
+        atxt = atxt + f'［＃水平線］［＃ここから罫囲み］\n{pscr}\n［＃ここで罫囲み終わり］［＃水平線］\n'
+    atxt = atxt + '［＃改ページ］\n'
+    return atxt
+
 # メイン処理
 def download_narou(url) -> bool:
     global headers, text_page, session, nvl_stat, total_pg
@@ -128,24 +151,9 @@ def download_narou(url) -> bool:
         if res.status_code != 200:
             print(f'{i}ページの取得に失敗しました')
             return False
-        soup = BeautifulSoup(res.text, 'html.parser')
-        sect = '本文'
-        try: # 前書き
-            irfc = aozora_esc(str(soup.find('div', class_='js-novel-text p-novel__text p-novel__text--preface')))
-        except:
-            irfc = 'None' # soup.findで帰り値がない場合はObject[None]が返されるがstrでキャストしてるため文字列m'None'が返される
-        body = aozora_esc(str(soup.find('div', class_='js-novel-text p-novel__text'))) # 本文
-        try: # 後書き
-            pscr = aozora_esc(str(soup.find('div', class_='js-novel-text p-novel__text p-novel__text--afterword')))
-        except:
-            pscr = 'None'
-        text_page.append(f'［＃中見出し］{sect}［＃中見出し終わり］\n')
-        if irfc != 'None':
-            text_page.append(f'［＃水平線］［＃ここから罫囲み］\n{irfc}\n［＃ここで罫囲み終わり］［＃水平線］\n')
-        text_page.append(f'{body}\n')
-        if pscr != 'None':
-            text_page.append(f'［＃水平線］［＃ここから罫囲み］\n{pscr}\n［＃ここで罫囲み終わり］［＃水平線］\n')
-        text_page.append('［＃改ページ］\n')
+        body = get_body(res.text)
+        text_page.append('［＃中見出し］本文［＃中見出し終わり］\n')
+        text_page.append(body)
     chapter = ''
     for i in range(1, total_pg + 1): # 連載作品の場合の各ページ取得処理
         sys.stdout.write('\r各話を取得中 [ ' + str(i) + '/ ' + str(total_pg) + ']')
@@ -157,25 +165,12 @@ def download_narou(url) -> bool:
         chpt = aozora_esc(get_chapter(res.text))
         soup = BeautifulSoup(res.text, 'html.parser')
         sect = aozora_esc(str(soup.find('h1', class_='p-novel__title p-novel__title--rensai')))
-        try: # 前書き
-            irfc = aozora_esc(str(soup.find('div', class_='js-novel-text p-novel__text p-novel__text--preface')))
-        except:
-            irfc = 'None'
-        body = aozora_esc(str(soup.find('div', class_='js-novel-text p-novel__text'))) # 本文
-        try: # 後書き
-            pscr = aozora_esc(str(soup.find('div', class_='js-novel-text p-novel__text p-novel__text--afterword')))
-        except:
-            pscr = 'None'
+        body = get_body(res.text)
         if chapter != chpt: # 章が変わった
             text_page.append(f'［＃大見出し］{chpt}［＃大見出し終わり］\n')
             chapter = chpt
         text_page.append(f'［＃中見出し］{sect}［＃中見出し終わり］\n')
-        if irfc != 'None':
-            text_page.append(f'［＃水平線］［＃ここから罫囲み］\n{irfc}\n［＃ここで罫囲み終わり］［＃水平線］\n')
-        text_page.append(f'{body}\n')
-        if pscr != 'None':
-            text_page.append(f'［＃水平線］［＃ここから罫囲み］\n{pscr}\n［＃ここで罫囲み終わり］［＃水平線］\n')
-        text_page.append('［＃改ページ］\n')
+        text_page.append(body)
 
         time.sleep(0.5)  # サーバー負荷軽減
     print('・・・完了')
