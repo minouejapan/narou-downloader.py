@@ -1,6 +1,7 @@
 #
-# BeautifulSoupを使用した小説家になろうダウンローダーフルセットバージョン
+# BeautifulSoupを使用した小説家になろうダウンローダー
 #
+# ver1.3 2025/08/10 ルビ・挿絵に対応した
 # ver1.2 2025/08/08 短編に対応した
 # ver1.1 2025/08/07 R18系(ノクターン等)作品のDLに対応
 #                   指定した作品URLの正当性チェックを追加した
@@ -16,6 +17,7 @@ import time
 import sys
 import re
 import codecs
+import html
 
 headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
 text_page = []  # 取り出したテキスト保管用
@@ -25,17 +27,24 @@ total_pg = 0    # 作品総ページ数
 auth_url = ''   # 作者ページURL
 session = requests.session()  # 設定したcookieを維持するためグローバル宣言しておく
 
-# 本文の青空文庫ルビ指定に用いられる文字があった場合誤作動しないように
-# 青空文庫代替表記に変換する
-def aozora_esc(base: str) -> str:
-    base = base.replace('《', '※［＃始め二重山括弧、1-1-52］')
-    base = base.replace('》', '※［＃終わり二重山括弧、1-1-53］')
-    base = base.replace('｜', '※［＃縦線、1-1-35］')
-    return base
 
-# HTML特殊文字 → 実際の文字
-def restore2realchar(base: str) -> str:
-    return html.unescape(base)
+# HTMLソーステキストを青空文庫形式準拠のテキストに変換する
+def aozora_esc(base: str) -> str:
+    tmp = html.unescape(base) # HTMLエスケープ文字を復元
+    tmp = tmp.replace('《', '※［＃始め二重山括弧、1-1-52］')  # 青空文庫のルビタグをエスケープ
+    tmp = tmp.replace('》', '※［＃終わり二重山括弧、1-1-53］')
+    tmp = tmp.replace('｜', '※［＃縦線、1-1-35］')
+    tmp = re.sub(r'<a href=".*?"><img.*?src="', '［＃リンクの図（', base) # 挿絵
+    tmp = re.sub(r'"*?/></a>', '）入る］', tmp)
+    tmp = re.sub(r'</rb><rp>.</rp><rt>', '《', tmp) # ルビ
+    tmp = re.sub(r'</rt><rp>.</rp></ruby>', '》', tmp)
+    tmp = re.sub(r'<rp>.</rp><rt>', '《', tmp)
+    tmp = re.sub(r'</rt><rp>.</rp></ruby>', '》', tmp)
+    tmp = tmp.replace('<ruby><rb>', '｜')
+    tmp = tmp.replace('<ruby>', '｜')
+    tmp = re.sub(r'<.*?>', '', tmp) # 最後にその他のタグを削除
+    return tmp
+
 # 作品ページから連載状況を取得する
 def get_nvl_stat(url: str) -> bool:
     global nvl_stat, total_pg, auth_url, session
@@ -44,8 +53,6 @@ def get_nvl_stat(url: str) -> bool:
     soup   = BeautifulSoup(res.text, 'html.parser')
     try:
         nvl_stat = soup.find('span', class_='p-infotop-type__type').text
-        if nvl_stat != '':
-            nvl_stat = f'【{nvl_stat}】'
     except:
         nvl_stat = ''
     try:
@@ -56,7 +63,7 @@ def get_nvl_stat(url: str) -> bool:
         total_pg = 0
     try:
         rurl = re.search('<dd class="p-infotop-data__value"><a href=".*?">', res.text)
-        if rurl:
+        if rurl is not None: # if rurl: で良いような気がするがPythonではNoneで判定するのが流儀らしい
             auth_url = re.sub('">', '', re.sub('<dd class="p-infotop-data__value"><a href="', '', rurl.group()))
     except:
         auth_url = ''
@@ -73,18 +80,21 @@ def get_toppage(url):
     auther = soup.find('div', class_='p-novel__author').text
     auther = str.strip(auther.replace('作者：', ''))
     try:
-        summary = soup.find('div', class_='p-novel__summary').text
+        summary = aozora_esc(str(soup.find('div', class_='p-novel__summary')))
     except:
         summary = ''
     # 作品情報URLを取得して連先状況を確認する
     a_tags = soup.find_all('a', class_='c-menu__item c-menu__item--headnav')
     get_nvl_stat(a_tags[0].get('href'))
     # 保存するファイル名を作成する(ついでに24文字までに整形)
-    filename = re.sub('[\\*?+.\t/:;,.| ]', '-', title)
+    filename = re.sub(r'[\\*?+.\t/:;,.| ]', '-', title)
     if len(filename) > 24:
         filename = title[:24]
-    filename = nvl_stat + filename + '.txt'
-    title = nvl_stat + title
+    # タイトル名に連載状況が含まれていなければ先頭に付加する
+    if title.find(nvl_stat) is None:
+        filename = f'【{nvl_stat}】' + filename
+        title = f'【{nvl_stat}】' + title
+    filename = filename + '.txt'
     print(f'作品タイトル：{title} をダウンロードします')
     text_page.append(f'{title}\n{auther}\n［＃ここから罫囲み］\n{summary}\n［＃ここで罫囲み終わり］\n［＃改ページ］\n')
 
@@ -99,7 +109,7 @@ def get_chapter(src) -> str:
         stmp = BeautifulSoup(cpt, 'html.parser')
         # 完全一致で<span>xxx</span>を抽出したいので正規表現を使用
         res = re.search(r'<span>.*</span>', str(stmp))
-        if res:
+        if res is not None:
             chpt = re.sub('</span>', '', re.sub('<span>', '', res.group()))
         else:
             chpt = ''
@@ -121,19 +131,19 @@ def download_narou(url) -> bool:
         soup = BeautifulSoup(res.text, 'html.parser')
         sect = '本文'
         try: # 前書き
-            irfc = aozora_esc(soup.find('div', class_='js-novel-text p-novel__text p-novel__text--preface').text)
+            irfc = aozora_esc(str(soup.find('div', class_='js-novel-text p-novel__text p-novel__text--preface')))
         except:
-            irfc = ''
-        body = aozora_esc(soup.find('div', class_='js-novel-text p-novel__text').text) # 本文
+            irfc = 'None' # soup.findで帰り値がない場合はObject[None]が返されるがstrでキャストしてるため文字列m'None'が返される
+        body = aozora_esc(str(soup.find('div', class_='js-novel-text p-novel__text'))) # 本文
         try: # 後書き
-            pscr = aozora_esc(soup.find('div', class_='js-novel-text p-novel__text p-novel__text--afterword').text)
+            pscr = aozora_esc(str(soup.find('div', class_='js-novel-text p-novel__text p-novel__text--afterword')))
         except:
-            pscr = ''
+            pscr = 'None'
         text_page.append(f'［＃中見出し］{sect}［＃中見出し終わり］\n')
-        if irfc:
+        if irfc != 'None':
             text_page.append(f'［＃水平線］［＃ここから罫囲み］\n{irfc}\n［＃ここで罫囲み終わり］［＃水平線］\n')
         text_page.append(f'{body}\n')
-        if pscr:
+        if pscr != 'None':
             text_page.append(f'［＃水平線］［＃ここから罫囲み］\n{pscr}\n［＃ここで罫囲み終わり］［＃水平線］\n')
         text_page.append('［＃改ページ］\n')
     chapter = ''
@@ -146,30 +156,29 @@ def download_narou(url) -> bool:
             return False
         chpt = aozora_esc(get_chapter(res.text))
         soup = BeautifulSoup(res.text, 'html.parser')
-        sect = aozora_esc(soup.find('h1', class_='p-novel__title p-novel__title--rensai').text)
+        sect = aozora_esc(str(soup.find('h1', class_='p-novel__title p-novel__title--rensai')))
         try: # 前書き
-            irfc = aozora_esc(soup.find('div', class_='js-novel-text p-novel__text p-novel__text--preface').text)
+            irfc = aozora_esc(str(soup.find('div', class_='js-novel-text p-novel__text p-novel__text--preface')))
         except:
-            irfc = ''
-        body = aozora_esc(soup.find('div', class_='js-novel-text p-novel__text').text) # 本文
+            irfc = 'None'
+        body = aozora_esc(str(soup.find('div', class_='js-novel-text p-novel__text'))) # 本文
         try: # 後書き
-            pscr = aozora_esc(soup.find('div', class_='js-novel-text p-novel__text p-novel__text--afterword').text)
+            pscr = aozora_esc(str(soup.find('div', class_='js-novel-text p-novel__text p-novel__text--afterword')))
         except:
-            pscr = ''
+            pscr = 'None'
         if chapter != chpt: # 章が変わった
             text_page.append(f'［＃大見出し］{chpt}［＃大見出し終わり］\n')
             chapter = chpt
         text_page.append(f'［＃中見出し］{sect}［＃中見出し終わり］\n')
-        if irfc:
+        if irfc != 'None':
             text_page.append(f'［＃水平線］［＃ここから罫囲み］\n{irfc}\n［＃ここで罫囲み終わり］［＃水平線］\n')
         text_page.append(f'{body}\n')
-        if pscr:
+        if pscr != 'None':
             text_page.append(f'［＃水平線］［＃ここから罫囲み］\n{pscr}\n［＃ここで罫囲み終わり］［＃水平線］\n')
         text_page.append('［＃改ページ］\n')
 
         time.sleep(0.5)  # サーバー負荷軽減
     print('・・・完了')
-
     return True
 
 def main():
@@ -177,18 +186,18 @@ def main():
 
     # コマンドライン引数チェック
     if len(sys.argv) == 1:
-        print('na6dl.py ver1.1 20205/8/4 copyright(c) INOUE, masahiro')
+        print('na6dl.py ver1.2 20205/8/10 copyright(c) INOUE, masahiro')
         print('Usage:')
         print('  python(|py|pytho3) na6dl.py 作品トップページURL\n')
         quit()
     # URLチェクッ
     url = sys.argv[1]
-    if (not re.match(r'^https://ncode.syosetu.com/n\d{4}\w{1,2}/', url) and
-        not re.match(r'^https://novel18.syosetu.com/n\d{4}\w{1,2}/', url)):
+    if ((re.match(r'^https://ncode.syosetu.com/n\d{4}\w{1,2}/', url) is None) and
+       (re.match(r'^https://novel18.syosetu.com/n\d{4}\w{1,2}/', url) is None)):
         print('\nURLが違います.')
         quit()
     # sessionにR18系アクセス許可用クッキーを設定する
-    if re.match(r'^https://novel18.*?', url):
+    if re.match(r'^https://novel18.*?', url)is not None:
         session.cookies.set('over18', 'yes')
 
     if download_narou(url) == False:
