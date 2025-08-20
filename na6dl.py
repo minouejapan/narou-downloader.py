@@ -1,6 +1,7 @@
 #
 # BeautifulSoupを使用した小説家になろうダウンローダー
 #
+# ver1.5 2025/08/20 1,000ページ以上の場合ページ数の取得に失敗してDL出来なかった不具合を修正した
 # ver1.4 2025/08/11 findの反転方法が間違っており連載状況を付加できなかった不具合を修正した
 #                   短編と連載のbody取得処理が重複していたのを集約した
 # ver1.3 2025/08/10 ルビ・挿絵に対応した
@@ -60,6 +61,7 @@ def get_nvl_stat(url: str) -> bool:
     try:
         pg = soup.find('span', class_='p-infotop-type__allep').text
         pg = re.sub('エピソード', '', re.sub('全','', pg))
+        pg = re.sub(',', '', pg) # 1,000ページ以上の場合の","を除去
         total_pg = int(pg)
     except:
         total_pg = 0
